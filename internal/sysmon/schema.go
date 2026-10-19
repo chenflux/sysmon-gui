@@ -5,7 +5,6 @@ import (
 	"io"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -117,28 +116,24 @@ func ParseSchema(output string) (*SchemaInfo, bool) {
 	}, true
 }
 
-var (
-	schemaOnce  sync.Once
-	schemaCache *SchemaInfo
-)
-
 // Schema 返回校验用 schema；优先从本机 Sysmon (-s) 动态解析，失败时回退内置清单。
+// 缓存于 Manager 实例（下载 Sysmon 后可经 RefreshExePath 重置重载）。
 func (m *Manager) Schema() *SchemaInfo {
-	schemaOnce.Do(func() {
-		schemaCache = fallbackSchema()
-		if !fileExists(m.exePath) {
+	m.schemaOnce.Do(func() {
+		m.schemaCache = fallbackSchema()
+		if !fileExists(m.ExePath()) {
 			return
 		}
-		cmd := exec.Command(m.exePath, "-s")
+		cmd := exec.Command(m.ExePath(), "-s")
 		hideWindow(cmd)
 		out, _, err := execWithTimeout(cmd, 30*time.Second)
 		if err != nil {
 			return
 		}
 		if sc, ok := ParseSchema(out); ok {
-			schemaCache = sc
+			m.schemaCache = sc
 			Logf("已加载 Sysmon 官方 schema v%s (binary %s)，共 %d 个事件类型", sc.SchemaVer, sc.BinaryVer, len(sc.Fields))
 		}
 	})
-	return schemaCache
+	return m.schemaCache
 }

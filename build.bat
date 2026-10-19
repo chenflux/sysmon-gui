@@ -14,7 +14,7 @@ if not defined GO (
 )
 
 rem --- Version stamping (ldflags injection) ---
-set VER=1.1.0
+set VER=1.4.0
 for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd.HHmm"') do set BTIME=%%i
 set REV=none
 where git >nul 2>nul && for /f %%i in ('git rev-parse --short HEAD 2^>nul') do set REV=%%i
@@ -28,20 +28,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [2/2] Copying Sysmon binaries and templates ...
-copy /y third_party\sysmon\Sysmon64.exe  dist\ >nul
-copy /y third_party\sysmon\Sysmon64a.exe dist\ >nul
-copy /y third_party\sysmon\Sysmon.exe    dist\ >nul
-copy /y third_party\sysmon\Eula.txt      dist\ >nul
-if not exist dist\templates mkdir dist\templates
-copy /y third_party\templates\*.xml dist\templates\ >nul
-
-if exist rules.backup.json (
-    if not exist dist\rules.json (
-        copy /y rules.backup.json dist\rules.json >nul
-        echo Restored user rules from rules.backup.json
-    )
-)
+echo [2/2] Done. Sysmon binaries are NOT bundled:
+echo   - First run: the app offers to auto-download Sysmon from Microsoft Sysinternals
+echo   - Or manually place Sysmon64.exe next to dist\sysmon-gui.exe (env SYSMON_EXE also works)
 
 echo.
 echo Build OK: dist\sysmon-gui.exe

@@ -1,8 +1,11 @@
 package sysmon
 
 import (
+	"archive/zip"
 	"bytes"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +23,23 @@ func hideWindow(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 }
 
+// isMostlyASCII 判断解码结果是否 ≥95% 为常规 ASCII（控制台程序输出几乎全是英文）。
+// 用于鉴别「纯 BOM-less UTF-16」（整体解码后为干净 ASCII）与「ASCII+UTF-16 混排」
+// （整体解码会把 ASCII 段变 CJK 乱码）。
+func isMostlyASCII(s string) bool {
+	if s == "" {
+		return false
+	}
+	total, ascii := 0, 0
+	for _, r := range s {
+		total++
+		if (r >= 0x20 && r <= 0x7e) || r == '\r' || r == '\n' || r == '\t' {
+			ascii++
+		}
+	}
+	return ascii*20 >= total*19
+}
+
 func decodeBytes(b []byte) string {
 	if len(b) >= 2 {
 		if b[0] == 0xFF && b[1] == 0xFE {
@@ -32,15 +52,22 @@ func decodeBytes(b []byte) string {
 	if len(b) >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF {
 		b = b[3:]
 	}
-	if !utf8.Valid(b) && looksUTF16(b) {
-		if len(b)%2 == 1 && b[0] == 0 {
-			b = b[1:]
+	if looksUTF16(b) {
+		body := b
+		if len(body)%2 == 1 && body[0] == 0 {
+			body = body[1:]
 		}
-		return decodeUTF16(b, true)
+		dec := decodeUTF16(body, true)
+		if isMostlyASCII(dec) {
+			return dec // 纯 BOM-less UTF-16（如 Sysmon -s 的 schema 输出）
+		}
+		if utf8.Valid(b) {
+			return decodeMixedLines(b) // ASCII 与 UTF-16 混排
+		}
+		return dec
 	}
 	if utf8.Valid(b) {
 		if bytes.Contains(b, []byte{0}) {
-			// 合法 UTF-8 且含 NUL：混排输出（ASCII 行 + ASCII 内容的 UTF-16 行），逐行识别
 			return decodeMixedLines(b)
 		}
 		return string(b)
@@ -370,6 +397,8 @@ type Manager struct {
 	dataDir     string
 	exePath     string
 	serviceName string
+	schemaOnce  sync.Once
+	schemaCache *SchemaInfo
 }
 
 type Status struct {
@@ -427,7 +456,23 @@ func findSysmonExe(dataDir string) string {
 }
 
 func (m *Manager) ExePath() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.exePath
+}
+
+// DataDir 返回数据目录（即可执行文件放置目录）。
+func (m *Manager) DataDir() string {
+	return m.dataDir
+}
+
+// RefreshExePath 重新定位 Sysmon 可执行文件并重置 schema 缓存（下载安装后调用）。
+func (m *Manager) RefreshExePath() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.exePath = findSysmonExe(m.dataDir)
+	m.schemaOnce = sync.Once{}
+	m.schemaCache = nil
 }
 
 func (m *Manager) ConfigPath() string {
@@ -839,4 +884,76 @@ func (m *Manager) Reinstall(configPath string, ruleGroupCount int) *OpResult {
 		re.Message = "Sysmon 重新安装成功: " + re.Message
 	}
 	return re
+}
+
+// sysmonZipURL 微软 Sysinternals 官方 Sysmon 下载地址。
+const sysmonZipURL = "https://download.sysinternals.com/files/Sysmon.zip"
+
+// DownloadSysmonTo 从微软官网下载 Sysmon 压缩包，解压所需可执行文件到 dir，
+// 随后删除压缩包。返回提取出的文件名列表。
+func DownloadSysmonTo(dir string) ([]string, error) {
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Get(sysmonZipURL)
+	if err != nil {
+		return nil, fmt.Errorf("连接微软官网失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("下载失败: HTTP %d", resp.StatusCode)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	zipPath := filepath.Join(dir, "sysmon-download.zip")
+	f, err := os.Create(zipPath)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		f.Close()
+		_ = os.Remove(zipPath)
+		return nil, fmt.Errorf("下载写入失败: %w", err)
+	}
+	f.Close()
+	defer os.Remove(zipPath) // 无论成败都清理压缩包
+
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, fmt.Errorf("解压失败(压缩包损坏?): %w", err)
+	}
+	defer zr.Close()
+	want := map[string]bool{"Sysmon64.exe": false, "Sysmon64a.exe": false, "Sysmon.exe": false, "Eula.txt": false}
+	var extracted []string
+	for _, zf := range zr.File {
+		if zf.FileInfo().IsDir() {
+			continue
+		}
+		name := filepath.Base(zf.Name)
+		done, ok := want[name]
+		if !ok || done {
+			continue
+		}
+		rc, err := zf.Open()
+		if err != nil {
+			continue
+		}
+		dst, err := os.Create(filepath.Join(dir, name))
+		if err != nil {
+			rc.Close()
+			return nil, err
+		}
+		_, cErr := io.Copy(dst, rc)
+		dErr := dst.Close()
+		rc.Close()
+		if cErr != nil || dErr != nil {
+			return nil, fmt.Errorf("写入 %s 失败: %v", name, cErr)
+		}
+		want[name] = true
+		extracted = append(extracted, name)
+	}
+	if !want["Sysmon64.exe"] {
+		return nil, fmt.Errorf("压缩包中未找到 Sysmon64.exe（官网内容异常），可手动从 %s 下载", sysmonZipURL)
+	}
+	Logf("Sysmon 官网下载完成: %v", extracted)
+	return extracted, nil
 }

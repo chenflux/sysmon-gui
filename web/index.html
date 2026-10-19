@@ -23,7 +23,8 @@
 <main>
   <section id="tab-status" class="tabpane active">
     <div id="sysmonMissingBanner" class="banner err hidden">
-      <span>&#10060; 未找到 Sysmon 程序 (Sysmon64.exe)。请从 <b>Microsoft Sysinternals 官网</b>下载 Sysmon 压缩包，将 <b>Sysmon64.exe</b> 放到本程序同目录；或设置环境变量 <b>SYSMON_EXE</b> 指向其位置。</span>
+      <span>&#10060; 未找到 Sysmon 程序。可点击右侧按钮从微软官网自动下载，或将 <b>Sysmon64.exe</b> 手动放到本程序同目录。</span>
+      <button class="btn sm primary" id="btnBannerDownload">从微软官网下载</button>
     </div>
     <div id="adminBanner" class="banner warn hidden">
       当前为普通权限（启动时未弹出提权或未同意授权），仅可查看状态与日志。
@@ -169,13 +170,13 @@
       <button class="icon-btn" data-close="importModal">&times;</button>
     </div>
     <div class="modal-body">
-      <div class="form-item" style="margin-bottom:14px"><label>从内置模板导入</label><div id="tplList" class="tpl-list"></div></div>
       <div class="form-item">
-        <label>从 Sysmon 配置 XML 文件导入</label>
+        <label>从本地 Sysmon 配置 XML 文件导入（支持任意第三方配置）</label>
         <div style="display:flex;gap:8px;align-items:center">
           <input type="file" id="importXmlFile" class="input" accept=".xml" style="flex:1">
           <button class="btn" id="btnParseXmlFile">解析文件</button>
         </div>
+        <div class="hint" style="margin-top:6px">可从 SwiftOnSecurity 等社区项目自行下载配置 XML 后导入；程序不再内置外部模板</div>
       </div>
       <div id="importPreview" class="hidden" style="margin-top:14px"></div>
     </div>
@@ -232,6 +233,25 @@
       <span class="hint" id="mapHint"></span>
       <span class="spacer"></span>
       <button class="btn primary" data-close="mapModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="setupModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span>&#9888; 需要 Sysmon 才能使用本程序</span>
+    </div>
+    <div class="modal-body">
+      <p>未检测到 <b>Sysmon</b>（微软 Sysinternals 官方系统监控驱动）。Sysmon GUI 依赖它采集事件，缺少该程序本工具无法工作。</p>
+      <p>是否现在自动从微软官网 <span class="mono">download.sysinternals.com</span> 下载并解压到本程序目录（约 3.6 MB，含 x64 / x86 / ARM64 版本）？</p>
+      <div id="setupStatus" class="hint"></div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint">不同意下载则程序不可用</span>
+      <span class="spacer"></span>
+      <button class="btn danger" id="btnSetupExit">退出程序</button>
+      <button class="btn primary" id="btnSetupDownload">&#8681; 从微软官网下载</button>
     </div>
   </div>
 </div>

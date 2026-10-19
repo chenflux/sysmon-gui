@@ -33,6 +33,11 @@ async function init() {
   try { state.geo.enabled = localStorage.getItem("sysmonGeoIP") === "1"; } catch (e) { }
   $("#chkGeoIP").checked = state.geo.enabled;
   if (state.geo.enabled) loadGeoStatus();
+  $("#btnSetupDownload").addEventListener("click", doSetupDownload);
+  $("#btnSetupExit").addEventListener("click", async () => {
+    if (window.confirm("未下载 Sysmon，程序将无法使用。确定退出吗？")) await shutdownApp();
+  });
+  $("#btnBannerDownload").addEventListener("click", () => { $("#setupStatus").textContent = ""; $("#setupModal").classList.remove("hidden"); });
   $("#btnRuleSim").addEventListener("click", simulateRule);
   $("#btnShowDiff").addEventListener("click", showRulesDiff);
   $("#btnAppLogRefresh").addEventListener("click", loadAppLog);
@@ -72,10 +77,36 @@ async function init() {
   await Promise.all([loadMeta(), loadStatus(), loadRules()]);
   renderEventFilter();
   loadEvents(true);
+  maybeShowSetup();
   setInterval(loadStatus, 10000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) loadStatus(); });
   const lastTab = localStorage.getItem("sysmonGuiTab");
   if (lastTab && ["status", "rules", "logs", "applog"].includes(lastTab) && lastTab !== "status") switchTab(lastTab);
+}
+
+/* ===================== Sysmon 首次运行引导 ===================== */
+
+function maybeShowSetup() {
+  const st = state.status;
+  if (!st || st.installed || st.exe_exists) return;
+  $("#setupStatus").textContent = "";
+  $("#setupModal").classList.remove("hidden");
+}
+
+async function doSetupDownload() {
+  const btn = $("#btnSetupDownload");
+  btn.disabled = true;
+  $("#setupStatus").textContent = "正在从微软官网下载 Sysmon（约 3.6MB）…";
+  try {
+    const d = await api("/api/sysmon/download", { method: "POST" });
+    $("#setupStatus").textContent = "下载完成: " + (d.extracted || []).join(", ");
+    $("#setupModal").classList.add("hidden");
+    toast("Sysmon 下载完成，点击「安装 Sysmon 并应用规则」完成部署");
+    await loadStatus();
+  } catch (e) {
+    $("#setupStatus").textContent = "下载失败: " + e.message + "（可检查网络/代理后重试，或手动下载放入程序目录）";
+    btn.disabled = false;
+  }
 }
 
 async function loadMeta() {

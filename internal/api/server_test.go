@@ -198,15 +198,6 @@ func TestHandlerAppLogAndDeployed(t *testing.T) {
 	}
 }
 
-func TestHandlerTemplates(t *testing.T) {
-	srv := newTestServer(t)
-	_, out := getJSON(t, srv.URL+"/api/templates")
-	arr := out["data"].([]interface{})
-	if len(arr) < 1 {
-		t.Fatalf("templates 应返回内置模板列表")
-	}
-}
-
 func TestHandlerEventsFamilyOnNoSysmon(t *testing.T) {
 	srv := newTestServer(t)
 	// 无 Sysmon 的 CI 环境: /api/events 返回 ok:false + 友好错误；有 Sysmon 的环境则 200。两者皆可接受。

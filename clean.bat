@@ -12,15 +12,6 @@ if not exist dist (
     goto :done
 )
 
-if /i "%~1"=="-full" (
-    echo   (full clean: no user data backup^)
-) else (
-    if exist dist\rules.json (
-        copy /y dist\rules.json rules.backup.json >nul
-        echo   User rules backed up to: rules.backup.json
-    )
-)
-
 rmdir /s /q dist
 if exist dist (
     echo.

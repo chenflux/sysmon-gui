@@ -268,35 +268,7 @@ function openImportModal() {
   $("#btnImportAppend").disabled = true;
   $("#btnImportReplace").disabled = true;
   $("#importXmlFile").value = "";
-  loadTemplates();
   $("#importModal").classList.remove("hidden");
-}
-
-async function loadTemplates() {
-  const box = $("#tplList");
-  box.innerHTML = '<span class="hint">加载模板列表…</span>';
-  try {
-    const list = await api("/api/templates");
-    if (!list.length) { box.innerHTML = '<span class="hint">无内置模板</span>'; return; }
-    box.innerHTML = list.map((t) => `
-      <div class="tpl-item ${t.available ? "" : "disabled"}">
-        <div class="tpl-info">
-          <div class="tpl-name">${esc(t.name)} ${t.available ? "" : '<span class="badge b-red">文件缺失</span>'}</div>
-          <div class="tpl-desc">${esc(t.description)}</div>
-        </div>
-        <button class="btn sm primary" data-tpl="${esc(t.id)}" ${t.available ? "" : "disabled"}>导入</button>
-      </div>`).join("");
-    box.querySelectorAll("[data-tpl]").forEach((b) => b.addEventListener("click", () => importTemplate(b.dataset.tpl)));
-  } catch (e) {
-    box.innerHTML = `<span class="hint" style="color:var(--danger)">${esc(e.message)}</span>`;
-  }
-}
-
-async function importTemplate(id) {
-  try {
-    const d = await api("/api/templates/" + encodeURIComponent(id));
-    showImportPreview(d);
-  } catch (e) { toast(e.message, "err"); }
 }
 
 async function parseXmlFile() {

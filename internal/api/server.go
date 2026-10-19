@@ -132,6 +132,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/sysmon/install", s.handleInstall)
 	mux.HandleFunc("POST /api/sysmon/uninstall", s.handleUninstall)
 	mux.HandleFunc("POST /api/sysmon/reinstall", s.handleReinstall)
+	mux.HandleFunc("POST /api/sysmon/download", s.handleSysmonDownload)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/events.csv", s.handleEventsCSV)
 	mux.HandleFunc("GET /api/events/xml", s.handleEventXML)
@@ -143,82 +144,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/elevate", s.handleElevate)
 	mux.HandleFunc("POST /api/rules/validate", s.handleValidate)
 	mux.HandleFunc("POST /api/rules/import-xml", s.handleImportXML)
-	mux.HandleFunc("GET /api/templates", s.handleTemplates)
-	mux.HandleFunc("GET /api/templates/{id}", s.handleTemplateImport)
 	mux.Handle("/", http.FileServer(http.FS(web.FS)))
 	return noStoreHandler{securityMiddleware(mux)}
-}
-
-type templateDef struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	File        string `json:"-"`
-}
-
-var templateDefs = []templateDef{
-	{ID: "swifton-security", Name: "SwiftOnSecurity 社区推荐配置", File: "swifton-security.xml",
-		Description: "社区最广泛使用的 Sysmon 配置模板（约 20 条规则 / 1400+ 条精选条件），覆盖进程/网络/DNS/注册表/管道/WMI 全事件类型的降噪与采集，来源: github.com/SwiftOnSecurity/sysmon-config"},
-	{ID: "wasb-dns-exclude", Name: "Windows 遥测 DNS 噪音排除", File: "wasb-dns-exclude.xml",
-		Description: "基于 WindowsSpyBlocker 遥测域名清单 (MIT) 生成的 DNS 查询排除规则，减少微软遥测域名产生的日志噪音"},
-}
-
-func (s *Server) templateFile(name string) (string, bool) {
-	exePath, _ := os.Executable()
-	exeDir := filepath.Dir(exePath)
-	candidates := []string{
-		filepath.Join(exeDir, "templates", name),
-		filepath.Join(s.dataDir, "templates", name),
-		filepath.Join(exeDir, "third_party", "templates", name),
-		filepath.Join(s.dataDir, "third_party", "templates", name),
-	}
-	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			return p, true
-		}
-	}
-	return "", false
-}
-
-func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request) {
-	type tplItem struct {
-		ID          string `json:"id"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Available   bool   `json:"available"`
-	}
-	out := []tplItem{}
-	for _, t := range templateDefs {
-		_, ok := s.templateFile(t.File)
-		out = append(out, tplItem{ID: t.ID, Name: t.Name, Description: t.Description, Available: ok})
-	}
-	ok(w, out)
-}
-
-func (s *Server) handleTemplateImport(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	var def *templateDef
-	for i := range templateDefs {
-		if templateDefs[i].ID == id {
-			def = &templateDefs[i]
-			break
-		}
-	}
-	if def == nil {
-		fail(w, http.StatusNotFound, "未知模板: "+id)
-		return
-	}
-	path, found := s.templateFile(def.File)
-	if !found {
-		fail(w, http.StatusNotFound, "模板文件缺失: "+def.File)
-		return
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		fail(w, http.StatusInternalServerError, "读取模板失败: "+err.Error())
-		return
-	}
-	s.respondImport(w, data)
 }
 
 func (s *Server) handleImportXML(w http.ResponseWriter, r *http.Request) {
@@ -600,6 +527,27 @@ func (s *Server) handleReinstall(w http.ResponseWriter, r *http.Request) {
 		s.markDeployed()
 	}
 	ok(w, res)
+}
+
+// handleSysmonDownload 从微软 Sysinternals 官网下载 Sysmon 并解压到程序目录。
+func (s *Server) handleSysmonDownload(w http.ResponseWriter, r *http.Request) {
+	if isAdmin, _ := sysmon.AdminDetailFast(); !isAdmin {
+		fail(w, http.StatusForbidden, "下载并写入 Sysmon 需要管理员权限，请以管理员身份运行本程序")
+		return
+	}
+	extracted, err := sysmon.DownloadSysmonTo(s.mgr.DataDir())
+	if err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.mgr.RefreshExePath()
+	st := s.mgr.CheckStatus()
+	ok(w, map[string]interface{}{
+		"extracted":  extracted,
+		"exe_exists": st.ExeExists,
+		"exe_path":   st.ExePath,
+		"version":    st.ExeVersion,
+	})
 }
 
 func parseEventOptions(r *http.Request) events.Options {

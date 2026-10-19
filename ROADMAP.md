@@ -181,7 +181,7 @@ EID3 网络连接的目的 IP 落到世界地图上（点大小=频次），地�
 ## 5.5 工程收尾 ✅
 
 - app.js 模块化拆分：`js/core.js`（工具/状态）+ `js/rules.js`（规则/试算/差异/导入）+ `js/logs.js`（日志/分组/剧本/预设）+ `js/tree.js`（谱系）+ `js/geo.js`（GeoIP/地图）+ `app.js`（启动/状态页），零重复声明
-- api handler 全覆盖 httptest（meta/rules 往返/validate/preview/applog/deployed/templates/config.xml/events 容错，兼容无 Sysmon CI）
+- api handler 全覆盖 httptest（meta/rules 往返/validate/preview/applog/deployed/config.xml/events 容错，兼容无 Sysmon CI）
 - manager.go version.dll `unsafe.Pointer` 存量 vet 告警清零（out-param 改类型化指针）
 - **git 仓库初始化**（.gitignore + 里程碑提交），防止再次误操作
 

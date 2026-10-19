@@ -28,6 +28,22 @@ func TestDecodeBytesMixedEncoding(t *testing.T) {
 	}
 }
 
+func TestDecodeBytesBomlessUTF16Whole(t *testing.T) {
+	// Sysmon -s 的 schema 输出：无 BOM 的纯 UTF-16LE（NUL 约占一半）
+	text := "\r\nSystem Monitor v15.22\r\n<manifest schemaversion=\"4.91\" binaryversion=\"18\"><event name=\"process\" rulename=\"ProcessCreate\"><data name=\"Image\"/></event></manifest>"
+	var u16 []byte
+	for _, c := range text {
+		u16 = append(u16, byte(c), byte(c>>8))
+	}
+	got := decodeBytes(u16)
+	if !strings.Contains(got, "System Monitor v15.22") || !strings.Contains(got, "<manifest schemaversion=\"4.91\"") {
+		t.Fatalf("BOM-less UTF-16 整体解码失败: %.120q", got)
+	}
+	if strings.ContainsRune(got, 0) {
+		t.Fatalf("解码结果残留 NUL: %.80q", got)
+	}
+}
+
 func TestIsTransientManifestFail(t *testing.T) {
 	if !isTransientManifestFail(errString("System Monitor ... Event manifest installation failed with last error: ??????? (exit status 13)")) {
 		t.Fatal("应识别为瞬时清单失败")
