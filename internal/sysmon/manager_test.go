@@ -1,6 +1,45 @@
 package sysmon
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestDecodeBytesMixedEncoding(t *testing.T) {
+	// Sysmon 控制台输出混排：ASCII 横幅 + UTF-16LE 错误行
+	banner := []byte("System Monitor v15.22 - System activity monitor\r\n")
+	msg := []uint16(nil)
+	for _, c := range "Event manifest installation failed with last error:" {
+		msg = append(msg, uint16(c))
+	}
+	var u16 []byte
+	for _, u := range msg {
+		u16 = append(u16, byte(u), byte(u>>8))
+	}
+	mixed := append(append([]byte{}, banner...), u16...)
+	mixed = append(mixed, '\r', '\n')
+
+	got := decodeBytes(mixed)
+	if !strings.Contains(got, "System Monitor v15.22") {
+		t.Fatalf("ASCII 横幅解码失败: %q", got)
+	}
+	if !strings.Contains(got, "Event manifest installation failed") {
+		t.Fatalf("UTF-16 错误行解码失败: %q", got)
+	}
+}
+
+func TestIsTransientManifestFail(t *testing.T) {
+	if !isTransientManifestFail(errString("System Monitor ... Event manifest installation failed with last error: ??????? (exit status 13)")) {
+		t.Fatal("应识别为瞬时清单失败")
+	}
+	if isTransientManifestFail(errString("access is denied")) {
+		t.Fatal("权限错误不应误判为瞬时清单失败")
+	}
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }
 
 func TestIsGenuineSysmonPath(t *testing.T) {
 	genuine := []string{

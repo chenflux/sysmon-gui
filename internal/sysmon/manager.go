@@ -32,13 +32,17 @@ func decodeBytes(b []byte) string {
 	if len(b) >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF {
 		b = b[3:]
 	}
-	if looksUTF16(b) {
-		if len(b)%2 == 1 && b[0] == 0x00 {
+	if !utf8.Valid(b) && looksUTF16(b) {
+		if len(b)%2 == 1 && b[0] == 0 {
 			b = b[1:]
 		}
 		return decodeUTF16(b, true)
 	}
 	if utf8.Valid(b) {
+		if bytes.Contains(b, []byte{0}) {
+			// 合法 UTF-8 且含 NUL：混排输出（ASCII 行 + ASCII 内容的 UTF-16 行），逐行识别
+			return decodeMixedLines(b)
+		}
 		return string(b)
 	}
 	return decodeANSI(b)
@@ -55,6 +59,32 @@ func looksUTF16(b []byte) bool {
 		}
 	}
 	return nul*4 > len(b)
+}
+
+// decodeMixedLines 处理同一段输出中混排「ASCII 行 + UTF-16 行」的情况：
+// Sysmon 控制台横幅为 ANSI，而错误文本行是 UTF-16LE，整体启发式会漏判导致乱码。
+func decodeMixedLines(b []byte) string {
+	lines := bytes.Split(b, []byte("\n"))
+	out := make([]string, len(lines))
+	for i, ln := range lines {
+		ln = bytes.TrimSuffix(ln, []byte("\r"))
+		if looksUTF16(ln) {
+			if len(ln)%2 == 1 {
+				if ln[0] == 0 {
+					ln = ln[1:]
+				} else {
+					l2 := make([]byte, 0, len(ln)+1)
+					l2 = append(l2, ln...)
+					l2 = append(l2, 0)
+					ln = l2
+				}
+			}
+			out[i] = decodeUTF16(ln, true)
+		} else {
+			out[i] = string(ln)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 var (
@@ -599,6 +629,13 @@ func compact(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
+// isTransientManifestFail 识别 Sysmon -i 的「事件清单安装瞬时失败」：
+// 开机初期 Winevt 服务/第三方安全软件未就绪时常见，重试通常即可成功。
+func isTransientManifestFail(err error) bool {
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "event manifest installation failed") || strings.Contains(s, "wevtutil")
+}
+
 func addRaw(res *OpResult, prefix, s string) {
 	if s = compact(s); s != "" {
 		res.Raw = append(res.Raw, prefix+s)
@@ -661,8 +698,23 @@ func (m *Manager) Install(configPath string, ruleGroupCount int) *OpResult {
 			addRaw(res, "[清理 -u] ", uErrOut)
 			installErr = runInstall()
 		}
+		// 事件清单安装瞬时失败：开机后 Winevt 服务/第三方安全软件未就绪的常见竞态，短暂等待后自动重试
+		if installErr != nil && isTransientManifestFail(installErr) {
+			for attempt := 1; attempt <= 2 && installErr != nil; attempt++ {
+				res.Steps = append(res.Steps, fmt.Sprintf("事件清单安装瞬时失败（开机初期常见），等待 1.5s 后自动重试 #%d", attempt))
+				time.Sleep(1500 * time.Millisecond)
+				installErr = runInstall()
+			}
+		}
 		if installErr != nil {
 			if st := findSysmonService(); !st.genuine {
+				// 尽力清理半安装状态，避免残留卡死后续安装
+				uc := exec.Command(exe, "-u", "force")
+				hideWindow(uc)
+				_, _, _ = execWithTimeout(uc, 120*time.Second)
+				if isTransientManifestFail(installErr) {
+					installErr = fmt.Errorf("%w（事件清单反复安装失败：请稍后重试或重启机器；若持续出现请排查第三方安全软件（如 eTrust SDP）对事件日志服务的干扰）", installErr)
+				}
 				res.Message = "Sysmon 安装失败: " + installErr.Error()
 				res.Errors = append(res.Errors, installErr.Error())
 				res.TookMs = time.Since(start).Milliseconds()
