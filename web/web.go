@@ -2,5 +2,5 @@ package web
 
 import "embed"
 
-//go:embed index.html app.js style.css countries.geojson
+//go:embed index.html app.js style.css js countries.geojson
 var FS embed.FS
