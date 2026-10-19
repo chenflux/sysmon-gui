@@ -92,11 +92,11 @@
       <div class="grp-drop" id="grpDrop">
         <button class="btn" id="btnGroup" title="对当前加载窗口内的事件做层级分组汇总">&#9638; 分组: 无 &#9662;</button>
         <div class="grp-menu hidden" id="grpMenu">
-          <div class="grp-menu-title">分组维度（按层级折叠汇总）</div>
+          <div class="grp-menu-title">分组维度（单选）</div>
           <label class="grp-opt"><input type="checkbox" value="process"> 进程 (Image)</label>
           <label class="grp-opt"><input type="checkbox" value="type"> 事件类型</label>
           <label class="grp-opt"><input type="checkbox" value="user"> 用户 (User)</label>
-          <div class="hint" style="padding:2px 12px 8px">分组在当前加载窗口（最多 5000 条）上进行</div>
+          <div class="hint" style="padding:2px 12px 8px">分组在当前加载窗口（最多 10 万条）上进行</div>
         </div>
       </div>
       <label class="auto-label" id="geoToggleLabel" title="启用后把外联 IP 批量提交到 ip-api.com 查询国家归属（结果本地缓存 30 天），默认关闭以保护隐私"><input type="checkbox" id="chkGeoIP"> GeoIP (在线)</label>
@@ -110,7 +110,7 @@
     <div class="table-wrap">
       <table class="evt-table">
         <thead><tr>
-          <th style="width:170px" class="sortable" id="thTime" data-sortkey="time">时间 <span class="sort-ind"></span></th>
+          <th style="width:205px" class="sortable" id="thTime" data-sortkey="time">时间 <span class="sort-ind"></span></th>
           <th style="width:70px" class="sortable" id="thEid" data-sortkey="event_id">ID <span class="sort-ind"></span></th>
           <th style="width:120px">类型</th><th>摘要</th></tr></thead>
         <tbody id="evtBody"><tr><td colspan="4" class="empty">点击「查询」加载 Sysmon 日志</td></tr></tbody>

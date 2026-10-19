@@ -121,8 +121,15 @@ func ParseSysmonXML(data []byte) (*RuleConfig, int, error) {
 				rule.Groups[0].Relation = "or"
 			}
 			if len(conds) == 0 {
-				rule.Enabled = false
-				rule.Note = "导入时该规则没有任何条件（原配置为空规则），已自动停用"
+				if onmatch == "include" {
+					// Sysmon 语义：空 include 规则 = 记录该类型全部事件，保留启用
+					rule.Enabled = true
+					rule.Note = "无条件规则：记录该类型全部事件（原配置为空规则）"
+				} else {
+					// 空 exclude = 排除全部事件，属危险写法，保持停用
+					rule.Enabled = false
+					rule.Note = "导入时该规则没有任何条件（空排除规则会丢弃全部事件，已自动停用）"
+				}
 			} else if rule.Note == "" {
 				rule.Note = "由 XML 导入"
 			}

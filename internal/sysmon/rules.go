@@ -209,7 +209,12 @@ func LintRules(cfg *RuleConfig, schema *SchemaInfo) *LintResult {
 			}
 		}
 		if r.Enabled && validConds == 0 {
-			lint.Errors = append(lint.Errors, prefix+": 规则已启用但没有有效条件")
+			if r.OnMatch == "include" {
+				// Sysmon 语义：空 include = 记录该类型全部事件，合法但需提示
+				lint.Warnings = append(lint.Warnings, prefix+": 无条件规则，将记录该类型的全部事件（如非有意为之请补充条件）")
+			} else {
+				lint.Errors = append(lint.Errors, prefix+": 排除规则已启用但没有有效条件（无条件排除会丢弃全部事件）")
+			}
 		}
 	}
 	for n, c := range names {

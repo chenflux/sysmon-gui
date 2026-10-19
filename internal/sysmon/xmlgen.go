@@ -73,6 +73,13 @@ func GenerateXML(cfg *RuleConfig) (string, error) {
 			}
 		}
 		if activeGroups == 0 {
+			if onmatch == "include" {
+				// 无条件 include = 记录该类型全部事件，输出空规则元素
+				name := strings.TrimSpace(r.Name)
+				fmt.Fprintf(&b, "    <RuleGroup name=\"%s\" groupRelation=\"or\">\n", escapeXML(name))
+				fmt.Fprintf(&b, "      <%s onmatch=\"include\"/>\n", escapeXML(r.EventType))
+				b.WriteString("    </RuleGroup>\n")
+			}
 			continue
 		}
 

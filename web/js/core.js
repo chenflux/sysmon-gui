@@ -74,7 +74,7 @@ function fmtTime(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return iso;
   const pad = (n, w) => String(n).padStart(w || 2, "0");
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
 }
 
 function dataMap(ev) {

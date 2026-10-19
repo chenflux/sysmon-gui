@@ -15,7 +15,7 @@ function opLabel(op) {
 
 function summarizeRule(rule) {
   const groups = (rule.groups || []).filter((g) => g.conditions && g.conditions.length);
-  if (!groups.length) return "（无条件）";
+  if (!groups.length) return rule.on_match === "include" ? "无条件 · 记录该类型全部事件" : "（无条件）";
   const rel = (r) => (r === "and" ? '<b class="and">且</b>' : '<b class="or">或</b>');
   return groups
     .map((g) => {
@@ -205,15 +205,16 @@ function validateEditing() {
   const r = state.editing;
   if (!r.name.trim()) return "规则名称不能为空";
   let conds = 0;
+  let halfFilled = false;
   for (const g of r.groups) {
     for (const c of g.conditions) {
-      if (!c.field) return "存在未选择字段的条件";
-      if (!c.values.length) return `条件「${c.field}」至少需要一个 IOC 值`;
+      if (!c.field || !c.values.length) { halfFilled = true; continue; }
       if (c.values.some((v) => v.includes(";"))) return `条件「${c.field}」的值不能包含分号`;
       conds++;
     }
   }
-  if (!conds) return "至少需要一个条件";
+  if (halfFilled) return "存在未填写完整的条件（需同时有字段和值，或删除该条件）";
+  if (!conds && r.on_match !== "include") return "至少需要一个条件";
   return null;
 }
 
@@ -437,6 +438,9 @@ function condMatchSim(cond, ev) {
 
 function ruleMatchesSim(rule, ev, targetEid) {
   if (targetEid && ev.event_id !== targetEid) return false;
+  // 无条件 include = 记录该类型全部事件
+  const hasCond = (rule.groups || []).some((g) => (g.conditions || []).length);
+  if (!hasCond) return rule.on_match === "include";
   return (rule.groups || []).some((g) => {
     const rel = g.relation === "or"
       ? g.conditions.some((c) => condMatchSim(c, ev))
@@ -449,7 +453,7 @@ function simulateRule() {
   const r = state.editing;
   if (!r) return;
   const conds = (r.groups || []).reduce((n, g) => n + (g.conditions || []).filter((c) => c.field && (c.values || []).length).length, 0);
-  if (!conds) { toast("规则至少需要一个完整条件才能试算", "err"); return; }
+  if (!conds && r.on_match !== "include") { toast("规则至少需要一个完整条件才能试算", "err"); return; }
   const t = state.meta.event_types.find((x) => x.type === r.event_type);
   const eid = t ? t.event_id : 0;
   const data = state.log.data;

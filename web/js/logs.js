@@ -281,12 +281,17 @@ function exportCsv() {
 
 const MAX_GROUP_ROWS = 50;
 
-function onGroupDimChange() {
+function onGroupDimChange(e) {
+  // 分组维度单选：勾选一个时取消其余
+  if (e && e.target && e.target.checked) {
+    $$("#grpMenu .grp-opt input").forEach((c) => { if (c !== e.target) c.checked = false; });
+  }
   const dims = [];
   $$("#grpMenu .grp-opt input").forEach((c) => { if (c.checked) dims.push(c.value); });
+  if (dims.length > 1) dims = [dims[0]];
   state.log.groupDims = dims;
   const names = { process: "进程", type: "事件类型", user: "用户" };
-  $("#btnGroup").innerHTML = "&#9638; 分组: " + (dims.length ? dims.map((d) => names[d]).join("+") : "无") + " &#9662;";
+  $("#btnGroup").innerHTML = "&#9638; 分组: " + (dims.length ? names[dims[0]] : "无") + " &#9662;";
   state.log.page = 1;
   loadEvents();
 }
