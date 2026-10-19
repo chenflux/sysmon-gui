@@ -85,14 +85,24 @@ async function init() {
   $("#chkGeoIP").addEventListener("change", toggleGeoIP);
   try { state.geo.enabled = localStorage.getItem("sysmonGeoIP") === "1"; } catch (e) { }
   $("#chkGeoIP").checked = state.geo.enabled;
+  if (state.geo.enabled) loadGeoStatus();
   $("#btnRuleSim").addEventListener("click", simulateRule);
   $("#btnShowDiff").addEventListener("click", showRulesDiff);
   $("#btnAppLogRefresh").addEventListener("click", loadAppLog);
+  $("#btnTheme").addEventListener("click", () => applyTheme((document.documentElement.dataset.theme === "dark") ? "light" : "dark"));
+  applyTheme((() => { try { return localStorage.getItem("sysmonTheme") || "light"; } catch (e) { return "light"; } })());
+  $("#btnSaveFilter").addEventListener("click", saveFilterPreset);
+  $("#chkNewOnly").addEventListener("change", (e) => {
+    state.log.newOnly = e.target.checked;
+    state.log.page = 1;
+    loadEvents();
+  });
   $("#chkAppLogAuto").addEventListener("change", () => {
     if (state.applogTimer) { clearInterval(state.applogTimer); state.applogTimer = null; }
     if ($("#chkAppLogAuto").checked) state.applogTimer = setInterval(() => { if (!$("#tab-applog").classList.contains("active")) return; loadAppLog(true); }, 5000);
   });
   renderPlaybooks();
+  renderFilterPresets();
   $$(".evt-table th.sortable").forEach((th) => th.addEventListener("click", () => {
     const key = th.dataset.sortkey;
     if (state.log.sortKey === key) state.log.sortDir *= -1;
@@ -529,8 +539,8 @@ async function loadEvents(silent, forceFull) {
   if (state.log.hours) p.set("hours", state.log.hours);
   p.set("fetch", state.log.fetch);
   state.log.grouped = state.log.groupDims.length > 0;
-  // 自动刷新 + 第 1 页（或分组视图）时按 record_id 游标增量拉取，避免每 5s 全量扫描
-  const canInc = !!silent && !forceFull && state.log.auto && state.log.lastMaxRec > 0 && (state.log.grouped || state.log.page === 1);
+  // 自动刷新 + 第 1 页（或分组视图）时按 record_id 游标增量拉取，避免周期性全量扫描
+  const canInc = !!silent && !forceFull && state.log.auto && state.log.lastMaxRec > 0 && (state.log.grouped || state.log.page === 1) && !state.log.newOnly;
   try {
     let d;
     if (canInc) {
@@ -540,24 +550,22 @@ async function loadEvents(silent, forceFull) {
       d = await api("/api/events?" + p.toString());
       const fresh = d.events || [];
       if (fresh.length >= 200) {
-        // 新事件过多，退回全量
         return await loadEvents(false, true);
       }
-      if (!fresh.length) return; // 无新事件，跳过重渲染
+      if (!fresh.length) { updateNewOnlyBar(); return; }
       const seen = new Set(state.log.data.map((e) => e.record_id));
       const add = fresh.filter((e) => !seen.has(e.record_id));
       if (!add.length) return;
       state.log.data = add.concat(state.log.data).slice(0, Math.max(state.log.fetch, state.log.pageSize));
       state.log.total += add.length;
       for (const e of fresh) if (e.record_id > state.log.lastMaxRec) state.log.lastMaxRec = e.record_id;
-      if (state.log.grouped) renderGroupedEvents(); else renderEvents();
-      renderGeoPanel();
+      finishEventsLoad();
       return;
     }
     if (state.log.grouped) {
-      // 分组视图需要整个窗口的内存数据，一次性拉全量（后端上限 5000）
+      // 分组视图需要整个窗口的内存数据，一次性拉全量（原生 API 上限 10 万）
       p.set("page", 1);
-      p.set("page_size", Math.min(state.log.fetch, 5000));
+      p.set("page_size", state.log.fetch);
     } else {
       p.set("page", state.log.page);
       p.set("page_size", state.log.pageSize);
@@ -568,12 +576,38 @@ async function loadEvents(silent, forceFull) {
     state.log.total = d.total;
     state.log.lastMaxRec = 0;
     for (const e of state.log.data) if (e.record_id > state.log.lastMaxRec) state.log.lastMaxRec = e.record_id;
-    if (state.log.grouped) renderGroupedEvents(); else renderEvents();
-    renderGeoPanel();
+    finishEventsLoad();
   } catch (e) {
     $("#evtBody").innerHTML = `<tr><td colspan="4" class="empty">${esc(e.message)}</td></tr>`;
     $("#evtPager").innerHTML = "";
   }
+}
+
+// 数据就绪后的公共收尾：只看新事件过滤 + 渲染
+function finishEventsLoad() {
+  if (state.log.newOnly) {
+    const mark = +(localStorage.getItem("sysmonReadMark") || 0);
+    state.log.data = state.log.data.filter((e) => e.record_id > mark);
+  }
+  updateNewOnlyBar();
+  if (state.log.grouped) renderGroupedEvents(); else renderEvents();
+  renderGeoPanel();
+}
+
+function updateNewOnlyBar() {
+  const bar = $("#newonlyBar");
+  if (!state.log.newOnly) { bar.classList.add("hidden"); return; }
+  const mark = +(localStorage.getItem("sysmonReadMark") || 0);
+  const n = state.log.data.length;
+  bar.classList.remove("hidden");
+  bar.innerHTML = `<span class="hint">&#128276; 只看新事件：基准 RecordID ${mark} · 当前窗口 ${n} 条新事件</span>
+    <button class="btn sm" id="btnMarkRead" ${state.log.lastMaxRec <= mark ? "disabled" : ""}>标记为已读</button>`;
+  const b = $("#btnMarkRead");
+  if (b) b.addEventListener("click", () => {
+    try { localStorage.setItem("sysmonReadMark", String(state.log.lastMaxRec)); } catch (e) { }
+    toast("已标记为已读，后续仅显示更新的事件");
+    loadEvents();
+  });
 }
 
 function fmtTime(iso) {
@@ -658,6 +692,7 @@ function detailContentHtml(ev, i) {
     </div>
     <div class="detail-actions">
       <button class="btn sm" data-copy="${i}">复制 JSON</button>
+      ${ev.record_id ? `<button class="btn sm" data-xml="${ev.record_id}" title="查看该事件的原始 XML（原生 API 拉取过的事件可查）">查看 XML</button>` : ""}
       <span class="hint">RecordID: ${ev.record_id} · 计算机: ${esc(ev.computer)}</span>
     </div>`;
 }
@@ -720,6 +755,16 @@ function bindDetailRow(d) {
   d.querySelectorAll("[data-tree]").forEach((b) => b.addEventListener("click", (e) => {
     e.stopPropagation();
     openTree(b.dataset.tree);
+  }));
+  d.querySelectorAll("[data-xml]").forEach((b) => b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const id = b.dataset.xml;
+    b.disabled = true;
+    fetch("/api/events/xml?record_id=" + id)
+      .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.text(); })
+      .then((t) => { showXml(t, "事件原始 XML (RecordID " + id + ")"); })
+      .catch((err) => toast("获取 XML 失败: " + err.message + "（可能不在缓存中，重新查询后再试）", "err"))
+      .finally(() => { b.disabled = false; });
   }));
   fillGeoBadges(d);
 }
@@ -1249,12 +1294,24 @@ function renderGroupedEvents() {
 function toggleGeoIP() {
   state.geo.enabled = $("#chkGeoIP").checked;
   try { localStorage.setItem("sysmonGeoIP", state.geo.enabled ? "1" : "0"); } catch (e) { }
-  if (state.geo.enabled) toast("已启用 GeoIP：外联 IP 将批量提交至 ip-api.com 查询（本地缓存 30 天）");
+  if (state.geo.enabled) {
+    toast(state.geo.mmdb && state.geo.mmdb.mmdb_loaded
+      ? `已启用 GeoIP：离线库 ${state.geo.mmdb.mmdb_type} 解析（不外发 IP）`
+      : "已启用 GeoIP：未发现离线库，外联 IP 将批量提交至 ip-api.com（本地缓存 30 天）");
+    loadGeoStatus();
+  }
   $("#geoPanel").classList.toggle("hidden", !state.geo.enabled);
   if (state.log.data.length) {
     if (state.log.grouped) renderGroupedEvents(); else renderEvents();
     renderGeoPanel();
   }
+}
+
+async function loadGeoStatus() {
+  try {
+    state.geo.mmdb = await api("/api/geoip/status");
+    if (state.geo.enabled) renderGeoPanel();
+  } catch (e) { /* 忽略，面板显示默认提示 */ }
 }
 
 async function geoLookup(ips) {
@@ -1306,6 +1363,12 @@ function renderGeoPanel() {
     return;
   }
   panel.classList.remove("hidden");
+  const mmdbOn = state.geo.mmdb && state.geo.mmdb.mmdb_loaded;
+  const mmdbBadge = state.geo.mmdb
+    ? (mmdbOn
+      ? `<span class="badge b-green" title="离线 MaxMind 库解析，不外发 IP">离线: ${esc(state.geo.mmdb.mmdb_type || "mmdb")}</span>`
+      : `<span class="badge b-orange" title="${esc(state.geo.mmdb.hint || "")}">在线 ip-api（放入 GeoLite2-City.mmdb 可离线）</span>`)
+    : "";
   const ipCount = new Map();
   for (const ev of state.log.data) {
     if (ev.event_id !== 3) continue;
@@ -1313,24 +1376,33 @@ function renderGeoPanel() {
     if (ip && IP_LIKE.test(ip)) ipCount.set(ip, (ipCount.get(ip) || 0) + 1);
   }
   if (!ipCount.size) {
-    panel.innerHTML = '<span class="hint">当前已加载事件中无网络连接 (EID 3) 目标 IP，暂无外联统计</span>';
+    panel.innerHTML = `<span class="hint">当前已加载事件中无网络连接 (EID 3) 目标 IP，暂无外联统计</span> ${mmdbBadge}`;
     return;
   }
-  panel.innerHTML = `<span class="hint">外联国家统计中…（${ipCount.size} 个目标 IP）</span>`;
+  panel.innerHTML = `<span class="hint">外联国家统计中…（${ipCount.size} 个目标 IP）</span> ${mmdbBadge}`;
   geoLookup([...ipCount.keys()]).then((cache) => {
     const byCountry = new Map();
     for (const [ip, n] of ipCount) {
       const info = cache[ip];
       const key = info && info.country ? info.country : "未解析";
-      const cur = byCountry.get(key) || { count: 0, ips: new Set() };
+      const cur = byCountry.get(key) || { count: 0, ips: new Set(), code: "", lat: null, lon: null };
       cur.count += n;
       cur.ips.add(ip);
+      if (info) {
+        if (!cur.code && info.code && info.code.length === 2) cur.code = info.code;
+        if (cur.lat == null && info.lat != null) { cur.lat = info.lat; cur.lon = info.lon; }
+      }
       byCountry.set(key, cur);
     }
+    state.geo.lastStats = byCountry;
     const top = [...byCountry.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 10);
     const max = top.length ? top[0][1].count : 1;
     panel.innerHTML = `
-      <div class="geo-title">外联国家 TOP${top.length} <span class="hint">（当前已加载 ${state.log.data.length} 条事件 / ${ipCount.size} 个目标 IP，开启分组可覆盖全窗口）</span></div>
+      <div class="geo-title">外联国家 TOP${top.length}
+        <span class="hint">（当前已加载 ${state.log.data.length} 条事件 / ${ipCount.size} 个目标 IP）</span>
+        ${mmdbBadge}
+        <button class="btn sm" id="btnGeoMap" title="在世界地图上查看外联分布">&#127758; 地图</button>
+      </div>
       <div class="geo-bars">
         ${top.map(([c, v]) => `
         <div class="geo-bar-row" title="${esc(c)}：${v.count} 次连接 / ${v.ips.size} 个 IP">
@@ -1339,7 +1411,149 @@ function renderGeoPanel() {
           <span class="geo-bar-num">${v.count}</span>
         </div>`).join("")}
       </div>`;
+    const mb = $("#btnGeoMap");
+    if (mb) mb.addEventListener("click", openGeoMap);
   });
+}
+
+/* ===================== P3b: 外联世界地图 ===================== */
+
+const A2_A3 = (() => {
+  const s = "AD:AND,AE:ARE,AF:AFG,AG:ATG,AI:AIA,AL:ALB,AM:ARM,AO:AGO,AQ:ATA,AR:ARG,AS:ASM,AT:AUT,AU:AUS,AW:ABW,AX:ALA,AZ:AZE,BA:BIH,BB:BRB,BD:BGD,BE:BEL,BF:BFA,BG:BGR,BH:BHR,BI:BDI,BJ:BEN,BL:BLM,BM:BMU,BN:BRN,BO:BOL,BQ:BES,BR:BRA,BS:BHS,BT:BTN,BV:BVT,BW:BWA,BY:BLR,BZ:BLZ,CA:CAN,CC:CCK,CD:COD,CF:CAF,CG:COG,CH:CHE,CI:CIV,CK:COK,CL:CHL,CM:CMR,CN:CHN,CO:COL,CR:CRI,CU:CUB,CV:CPV,CW:CUW,CX:CXR,CY:CYP,CZ:CZE,DE:DEU,DJ:DJI,DK:DNK,DM:DMA,DO:DOM,DZ:DZA,EC:ECU,EE:EST,EG:EGY,EH:ESH,ER:ERI,ES:ESP,ET:ETH,FI:FIN,FJ:FJI,FK:FLK,FM:FSM,FO:FRO,FR:FRA,GA:GAB,GB:GBR,GD:GRD,GE:GEO,GF:GUF,GG:GGY,GH:GHA,GI:GIB,GL:GRL,GM:GMB,GN:GIN,GP:GLP,GQ:GNQ,GR:GRC,GS:SGS,GT:GTM,GU:GUM,GW:GNB,GY:GUY,HK:HKG,HM:HMD,HN:HND,HR:HRV,HT:HTI,HU:HUN,ID:IDN,IE:IRL,IL:ISR,IM:IMN,IN:IND,IO:IOT,IQ:IRQ,IR:IRN,IS:ISL,IT:ITA,JE:JEY,JM:JAM,JO:JOR,JP:JPN,KE:KEN,KG:KGZ,KH:KHM,KI:KIR,KM:COM,KN:KNA,KP:PRK,KR:KOR,KW:KWT,KY:CYM,KZ:KAZ,LA:LAO,LB:LBN,LC:LCA,LI:LIE,LK:LKA,LR:LBR,LS:LSO,LT:LTU,LU:LUX,LV:LVA,LY:LBY,MA:MAR,MC:MCO,MD:MDA,ME:MNE,MF:MAF,MG:MDG,MH:MHL,MK:MKD,ML:MLI,MM:MMR,MN:MNG,MO:MAC,MP:MNP,MQ:MTQ,MR:MRT,MS:MSR,MT:MLT,MU:MUS,MV:MDV,MW:MWI,MX:MEX,MY:MYS,MZ:MOZ,NA:NAM,NC:NCL,NE:NER,NF:NFK,NG:NGA,NI:NIC,NL:NLD,NO:NOR,NP:NPR,NR:NRU,NU:NIU,NZ:NZL,OM:OMN,PA:PAN,PE:PER,PF:PYF,PG:PNG,PH:PHL,PK:PAK,PL:POL,PM:SPM,PN:PCN,PR:PRI,PS:PSE,PT:PRT,PW:PLW,PY:PRY,QA:QAT,RE:REU,RO:ROU,RS:SRB,RU:RUS,RW:RWA,SA:SAU,SB:SLB,SC:SYC,SD:SDN,SE:SWE,SG:SGP,SH:SHN,SI:SVN,SJ:SJM,SK:SVK,SL:SLE,SM:SMR,SN:SEN,SO:SOM,SR:SUR,SS:SSD,ST:STP,SV:SLV,SX:SXM,SY:SYR,SZ:SWZ,TC:TCA,TD:TCD,TF:ATF,TG:TGO,TH:THA,TJ:TJK,TK:TKL,TL:TLS,TM:TKM,TN:TUN,TO:TON,TR:TUR,TT:TTO,TV:TUV,TW:TWN,TZ:TZA,UA:UKR,UG:UGA,UM:UMI,US:USA,UY:URY,UZ:UZB,VA:VAT,VC:VCT,VE:VEN,VG:VGB,VI:VIR,VN:VNM,VU:VUT,WF:WLF,WS:WSM,YE:YEM,YT:MYT,ZA:ZAF,ZM:ZMB,ZW:ZWE";
+  const m = {};
+  for (const pair of s.split(",")) { const [a, b] = pair.split(":"); m[a] = b; }
+  return m;
+})();
+
+let worldGeo = null;
+
+async function openGeoMap() {
+  if (!state.geo.lastStats || !state.geo.lastStats.size) {
+    toast("暂无外联统计数据（需先加载含网络连接的事件）", "err");
+    return;
+  }
+  if (!worldGeo) {
+    try {
+      const r = await fetch("/countries.geojson");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      worldGeo = await r.json();
+    } catch (e) {
+      toast("加载世界地图数据失败: " + e.message, "err");
+      return;
+    }
+  }
+  renderGeoMap();
+}
+
+function renderGeoMap() {
+  const W = 960, H = 480;
+  const stats = state.geo.lastStats;
+  const byA3 = new Map();
+  let max = 1;
+  for (const [name, v] of stats) {
+    if (!v.code) continue;
+    const a3 = A2_A3[v.code.toUpperCase()];
+    if (!a3) continue;
+    byA3.set(a3, name);
+    if (v.count > max) max = v.count;
+  }
+  const proj = (lon, lat) => [((lon + 180) / 360) * W, ((90 - lat) / 180) * H];
+  const shade = (c) => {
+    const t = Math.sqrt(c / max);
+    const from = [219, 234, 254], to = [30, 64, 175];
+    const mix = from.map((f, i) => Math.round(f + (to[i] - f) * t));
+    return `rgb(${mix.join(",")})`;
+  };
+  let paths = "";
+  for (const f of worldGeo.features) {
+    const a3 = f.id;
+    if (!a3) continue;
+    const g = f.geometry;
+    if (!g) continue;
+    const polys = g.type === "Polygon" ? [g.coordinates] : g.type === "MultiPolygon" ? g.coordinates : [];
+    let d = "";
+    for (const poly of polys) {
+      for (const ring of poly) {
+        for (let i = 0; i < ring.length; i++) {
+          const [x, y] = proj(ring[i][0], ring[i][1]);
+          d += (i === 0 ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
+        }
+        d += "Z";
+      }
+    }
+    const cn = byA3.get(a3);
+    const cnt = cn ? stats.get(cn).count : 0;
+    paths += `<path d="${d}" fill="${cn ? shade(cnt) : "var(--map-empty)"}" stroke="var(--map-stroke)" stroke-width="0.5">${cn ? `<title>${esc(cn)}: ${cnt} 次连接 / ${stats.get(cn).ips.size} 个 IP</title>` : ""}</path>`;
+  }
+  let dots = "";
+  for (const [name, v] of stats) {
+    if (v.lat == null || v.lon == null) continue;
+    const [x, y] = proj(v.lon, v.lat);
+    const r = 3 + Math.sqrt(v.count) * 1.2;
+    dots += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="rgba(220,38,38,.75)" stroke="#fff" stroke-width="1"><title>${esc(name)}: ${v.count} 次连接</title></circle>`;
+  }
+  $("#mapModalTitle").textContent = `外联地图（${stats.size} 个国家/地区）`;
+  $("#mapBody").innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;background:var(--map-bg);border-radius:8px">${paths}${dots}</svg>`;
+  $("#mapHint").textContent = dots
+    ? "颜色深浅 = 该国外联次数；红点 = City 离线库提供的坐标（点大小 = 频次）"
+    : "颜色深浅 = 该国外联次数（使用 GeoLite2-City.mmdb 可显示坐标圆点）";
+  $("#mapModal").classList.remove("hidden");
+}
+
+/* ===================== 筛选预设 ===================== */
+
+function loadFilterPresets() {
+  try { return JSON.parse(localStorage.getItem("sysmonFilters") || "[]"); } catch (e) { return []; }
+}
+
+function saveFilterPresets(list) {
+  try { localStorage.setItem("sysmonFilters", JSON.stringify(list)); } catch (e) { }
+}
+
+function renderFilterPresets() {
+  const list = loadFilterPresets();
+  const box = $("#filterPresets");
+  if (!list.length) { box.innerHTML = ""; return; }
+  box.innerHTML = '<span class="pb-title">已存筛选:</span>' + list.map((p, i) => `
+    <span class="preset-chip" data-preset="${i}" title="EID ${esc(p.eventId || "全部")}${p.keyword ? " · " + esc(p.keyword) : ""}${p.hours ? " · " + p.hours + "h" : ""} · " + p.fetch + "条">${esc(p.name)}
+      <button data-preset-del="${i}" title="删除预设">&times;</button></span>`).join("");
+  box.querySelectorAll("[data-preset]").forEach((c) => c.addEventListener("click", (e) => {
+    if (e.target.closest("[data-preset-del]")) return;
+    const p = loadFilterPresets()[+c.dataset.preset];
+    if (!p) return;
+    state.log.eventId = p.eventId || "";
+    state.log.keyword = p.keyword || "";
+    state.log.hours = p.hours || "";
+    state.log.fetch = +p.fetch || 1000;
+    $("#fltEvent").value = state.log.eventId;
+    $("#fltKeyword").value = state.log.keyword;
+    $("#fltHours").value = state.log.hours;
+    $("#fltFetch").value = String(state.log.fetch);
+    state.log.page = 1;
+    loadEvents();
+    toast("已应用筛选预设「" + p.name + "」");
+  }));
+  box.querySelectorAll("[data-preset-del]").forEach((b) => b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const list2 = loadFilterPresets();
+    list2.splice(+b.dataset.presetDel, 1);
+    saveFilterPresets(list2);
+    renderFilterPresets();
+  }));
+}
+
+function saveFilterPreset() {
+  const defName = (state.log.eventId ? "EID" + state.log.eventId + " " : "") + (state.log.keyword.trim() ? state.log.keyword.trim().slice(0, 12) : "全部");
+  const name = window.prompt("预设名称:", defName);
+  if (name === null) return;
+  const n = name.trim();
+  if (!n) { toast("名称不能为空", "err"); return; }
+  const list = loadFilterPresets();
+  if (list.length >= 12) { toast("最多保存 12 个预设，请先删除旧的", "err"); return; }
+  list.push({ name: n, eventId: state.log.eventId, keyword: state.log.keyword.trim(), hours: state.log.hours, fetch: state.log.fetch });
+  saveFilterPresets(list);
+  renderFilterPresets();
+  toast("筛选预设已保存");
 }
 
 /* ===================== 检测剧本快捷筛选 ===================== */
