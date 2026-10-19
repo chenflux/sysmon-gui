@@ -60,7 +60,7 @@ func DefaultRuleConfig() *RuleConfig {
 				}}}},
 			{ID: "base_net_include", Name: "基线-记录网络连接", EventType: "NetworkConnect", OnMatch: "include", Enabled: true,
 				Groups: []*CondGroup{{Relation: "or", Conditions: []*Condition{
-					{Field: "DestinationIp", Op: "contains", Values: []string{"."},
+					{Field: "DestinationIp", Op: "contains any", Values: []string{".", ":"},
 					},
 				}}}},
 			{ID: "base_dns_exclude", Name: "基线-排除常见DNS噪音", EventType: "DnsQuery", OnMatch: "exclude", Enabled: true,
