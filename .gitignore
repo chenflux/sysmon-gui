@@ -1,0 +1,16 @@
+# 构建产物与运行时数据
+dist/
+webview2-data*/
+sysmon-gui.log
+sysmon-gui-test.exe
+
+# 运行时生成（部署状态/缓存/快照）
+deployed.hash
+geoip-cache.json
+rules-deployed.json
+sysmon-config.xml
+winevt-backup/
+
+# 临时文件
+*.tmp
+*.bak

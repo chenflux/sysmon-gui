@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sysmon GUI</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">&#9679;</span> Sysmon<span class="accent">GUI</span></div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="status">状态与部署</button>
+    <button class="tab" data-tab="rules">规则编辑</button>
+    <button class="tab" data-tab="logs">日志查看</button>
+    <button class="tab" data-tab="applog">运行日志</button>
+  </nav>
+  <div class="top-status" id="topStatus">加载中…</div>
+  <button class="topbar-btn" id="btnTheme" title="切换深/浅色主题">&#9681; 主题</button>
+  <button class="topbar-exit" id="btnExit" title="退出 Sysmon GUI 程序">&#9211; 退出</button>
+</header>
+
+<main>
+  <section id="tab-status" class="tabpane active">
+    <div id="sysmonMissingBanner" class="banner err hidden">
+      <span>&#10060; 未找到 Sysmon 程序 (Sysmon64.exe)。请从 <b>Microsoft Sysinternals 官网</b>下载 Sysmon 压缩包，将 <b>Sysmon64.exe</b> 放到本程序同目录；或设置环境变量 <b>SYSMON_EXE</b> 指向其位置。</span>
+    </div>
+    <div id="adminBanner" class="banner warn hidden">
+      当前为普通权限（启动时未弹出提权或未同意授权），仅可查看状态与日志。
+      <button class="btn sm" id="btnElevate">申请管理员权限</button>
+      <span>或退出后右键以管理员身份运行。</span>
+      <span class="hint" id="adminDetail"></span>
+    </div>
+    <div class="banner dirty hidden" id="dirtyBanner1">
+      <span>&#9888; 规则已修改，尚未应用到 Sysmon（当前系统仍在使用旧规则）— 点击下方按钮立即应用</span>
+    </div>
+    <div class="cards" id="statusCards"></div>
+    <div class="actions">
+      <button id="btnInstall" class="btn primary">&#9654; 安装并应用当前规则</button>
+      <button id="btnReinstall" class="btn">&#8635; 重新安装</button>
+      <button id="btnUninstall" class="btn danger">&#10005; 卸载</button>
+    </div>
+    <div class="hint" id="statusHint"></div>
+    <div class="oplog hidden" id="opLog"></div>
+  </section>
+
+  <section id="tab-rules" class="tabpane">
+    <div class="toolbar">
+      <button id="btnNewRule" class="btn primary">＋ 新建规则</button>
+      <button id="btnImport" class="btn">&#128230; 导入</button>
+      <span class="hint">规则修改后自动保存，应用需在「状态与部署」页操作</span>
+      <span class="spacer"></span>
+      <button id="btnValidate" class="btn">&#10004; 校验规则</button>
+      <button id="btnPreviewXml" class="btn">预览 XML</button>
+      <button id="btnDownloadXml" class="btn">&#8681; 下载 XML</button>
+    </div>
+    <div class="hint rule-hint">
+      规则以可视化条件组方式编辑，无需接触 XML：<b>组内</b>条件可按「与 / 或」组合，<b>多个条件组</b>之间为「或」关系；
+      使用「不包含 / 不等于」类操作符或「排除」类规则可实现排除逻辑。
+    </div>
+    <div class="banner dirty hidden" id="dirtyBanner2">
+      <span>&#9888; 已保存的规则尚未应用到 Sysmon</span>
+      <button class="btn sm" id="btnShowDiff">查看差异</button>
+      <button class="btn sm" id="btnGotoStatus">前往状态页应用 &#8594;</button>
+    </div>
+    <div id="rulesList" class="rules-list"></div>
+  </section>
+
+  <section id="tab-logs" class="tabpane">
+    <div class="filterbar">
+      <select id="fltEvent" class="input" title="事件类型"></select>
+      <input id="fltKeyword" class="input" placeholder="关键字 (进程名/命令行/IP/域名…)" style="min-width:240px">
+      <select id="fltHours" class="input" title="时间范围">
+        <option value="">全部时间</option>
+        <option value="1">最近 1 小时</option>
+        <option value="6">最近 6 小时</option>
+        <option value="24">最近 24 小时</option>
+        <option value="72">最近 3 天</option>
+        <option value="168">最近 7 天</option>
+      </select>
+      <select id="fltFetch" class="input" title="从系统日志加载的条数上限（原生 API 支持 10 万条全量）">
+        <option value="200">加载 200 条</option>
+        <option value="1000" selected>加载 1000 条</option>
+        <option value="5000">加载 5000 条</option>
+        <option value="20000">加载 2 万条</option>
+        <option value="100000">加载 10 万条 (全量)</option>
+      </select>
+      <button id="btnQuery" class="btn primary">查询</button>
+      <button id="btnSaveFilter" class="btn" title="把当前 EID/关键字/时间/条数组合保存为预设">&#128190; 存筛选</button>
+      <label class="auto-label" title="仅显示上次「标记已读」之后产生的新事件 (按 RecordID 基准)"><input type="checkbox" id="chkNewOnly"> 只看新事件</label>
+      <label class="auto-label"><input type="checkbox" id="chkAuto"> 自动刷新 (5s)</label>
+      <div class="grp-drop" id="grpDrop">
+        <button class="btn" id="btnGroup" title="对当前加载窗口内的事件做层级分组汇总">&#9638; 分组: 无 &#9662;</button>
+        <div class="grp-menu hidden" id="grpMenu">
+          <div class="grp-menu-title">分组维度（按层级折叠汇总）</div>
+          <label class="grp-opt"><input type="checkbox" value="process"> 进程 (Image)</label>
+          <label class="grp-opt"><input type="checkbox" value="type"> 事件类型</label>
+          <label class="grp-opt"><input type="checkbox" value="user"> 用户 (User)</label>
+          <div class="hint" style="padding:2px 12px 8px">分组在当前加载窗口（最多 5000 条）上进行</div>
+        </div>
+      </div>
+      <label class="auto-label" id="geoToggleLabel" title="启用后把外联 IP 批量提交到 ip-api.com 查询国家归属（结果本地缓存 30 天），默认关闭以保护隐私"><input type="checkbox" id="chkGeoIP"> GeoIP (在线)</label>
+      <span class="spacer"></span>
+      <button id="btnExportCsv" class="btn">&#8681; 导出 CSV</button>
+    </div>
+    <div id="geoPanel" class="geo-panel hidden"></div>
+    <div class="playbook-bar" id="playbookBar"></div>
+    <div class="filter-presets" id="filterPresets"></div>
+    <div class="newonly-bar hidden" id="newonlyBar"></div>
+    <div class="table-wrap">
+      <table class="evt-table">
+        <thead><tr>
+          <th style="width:170px" class="sortable" id="thTime" data-sortkey="time">时间 <span class="sort-ind"></span></th>
+          <th style="width:70px" class="sortable" id="thEid" data-sortkey="event_id">ID <span class="sort-ind"></span></th>
+          <th style="width:120px">类型</th><th>摘要</th></tr></thead>
+        <tbody id="evtBody"><tr><td colspan="4" class="empty">点击「查询」加载 Sysmon 日志</td></tr></tbody>
+      </table>
+    </div>
+    <div class="pager" id="evtPager"></div>
+  </section>
+
+  <section id="tab-applog" class="tabpane">
+    <div class="toolbar">
+      <button id="btnAppLogRefresh" class="btn">&#8635; 刷新</button>
+      <label class="auto-label"><input type="checkbox" id="chkAppLogAuto"> 自动刷新 (5s)</label>
+      <span class="hint">本程序运行日志 (sysmon-gui.log)，排查安装/查询问题用；超过 512KB 自动清空</span>
+    </div>
+    <pre id="applogPre" class="applog-pre">尚未加载</pre>
+  </section>
+</main>
+
+<div class="modal hidden" id="ruleModal">
+  <div class="modal-box modal-lg">
+    <div class="modal-head">
+      <span id="ruleModalTitle">编辑规则</span>
+      <button class="icon-btn" data-close="ruleModal">&times;</button>
+    </div>
+    <div class="modal-body" id="ruleModalBody"></div>
+    <div class="modal-foot">
+      <span class="hint">Sysmon 规则由本界面自动生成 XML，无需手动编写</span>
+      <span class="spacer"></span>
+      <button class="btn" id="btnRuleSim" title="用当前已加载的日志事件模拟此规则的命中情况">&#9889; 试算</button>
+      <button class="btn" id="btnRulePreview">预览 XML</button>
+      <button class="btn" data-close="ruleModal">取消</button>
+      <button class="btn primary" id="btnRuleSave">保存规则</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="xmlModal">
+  <div class="modal-box modal-lg">
+    <div class="modal-head">
+      <span id="xmlModalTitle">Sysmon 配置 XML 预览</span>
+      <button class="icon-btn" data-close="xmlModal">&times;</button>
+    </div>
+    <div class="modal-body"><pre id="xmlPre" class="xml-pre"></pre></div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button class="btn" id="btnXmlDownload">&#8681; 下载此 XML</button>
+      <button class="btn primary" data-close="xmlModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="importModal">
+  <div class="modal-box modal-lg">
+    <div class="modal-head">
+      <span>导入规则</span>
+      <button class="icon-btn" data-close="importModal">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-item" style="margin-bottom:14px"><label>从内置模板导入</label><div id="tplList" class="tpl-list"></div></div>
+      <div class="form-item">
+        <label>从 Sysmon 配置 XML 文件导入</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="file" id="importXmlFile" class="input" accept=".xml" style="flex:1">
+          <button class="btn" id="btnParseXmlFile">解析文件</button>
+        </div>
+      </div>
+      <div id="importPreview" class="hidden" style="margin-top:14px"></div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint">导入后需点击「保存并部署」才会生效</span>
+      <span class="spacer"></span>
+      <button class="btn" data-close="importModal">取消</button>
+      <button class="btn" id="btnImportAppend" disabled>&#43; 追加到现有规则</button>
+      <button class="btn primary" id="btnImportReplace" disabled>&#8635; 替换全部规则</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="treeModal">
+  <div class="modal-box modal-lg">
+    <div class="modal-head">
+      <span id="treeModalTitle">进程谱系</span>
+      <button class="icon-btn" data-close="treeModal">&times;</button>
+    </div>
+    <div class="modal-body" id="treeBody"></div>
+    <div class="modal-foot">
+      <span class="hint" id="treeHint"></span>
+      <span class="spacer"></span>
+      <button class="btn" id="btnTreeExpandAll">全部展开</button>
+      <button class="btn" id="btnTreeCollapseAll">全部折叠</button>
+      <button class="btn primary" data-close="treeModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="simModal">
+  <div class="modal-box modal-lg">
+    <div class="modal-head">
+      <span id="simModalTitle">规则试算</span>
+      <button class="icon-btn" data-close="simModal">&times;</button>
+    </div>
+    <div class="modal-body" id="simBody"></div>
+    <div class="modal-foot">
+      <span class="hint">试算基于日志页签当前已加载的事件窗口（非全量历史），结果仅供参考</span>
+      <span class="spacer"></span>
+      <button class="btn primary" data-close="simModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="mapModal">
+  <div class="modal-box modal-lg">
+    <div class="modal-head">
+      <span id="mapModalTitle">外联地图</span>
+      <button class="icon-btn" data-close="mapModal">&times;</button>
+    </div>
+    <div class="modal-body" id="mapBody"></div>
+    <div class="modal-foot">
+      <span class="hint" id="mapHint"></span>
+      <span class="spacer"></span>
+      <button class="btn primary" data-close="mapModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="resultModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span id="resultModalTitle">结果</span>
+      <button class="icon-btn" data-close="resultModal">&times;</button>
+    </div>
+    <div class="modal-body"><pre id="resultPre" class="result-pre"></pre></div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button class="btn primary" data-close="resultModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+<script src="app.js"></script>
+</body>
+</html>
