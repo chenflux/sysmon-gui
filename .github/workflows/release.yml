@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $ver = "${env:GITHUB_REF_NAME}".TrimStart('v')
+          if ([string]::IsNullOrEmpty($ver) -or $ver -eq 'main') { $ver = '1.0.0' }
+          $bt = Get-Date -Format 'yyyyMMdd.HHmm'
+          $rev = "${env:GITHUB_SHA}".Substring(0, 7)
+          Write-Host "Building sysmon-gui v$ver (build $bt, rev $rev)"
+          go build -trimpath -ldflags "-s -w -H=windowsgui -X sysmon-gui/internal/version.Version=$ver -X sysmon-gui/internal/version.BuildTime=$bt -X sysmon-gui/internal/version.GitRev=$rev" -o dist/sysmon-gui.exe .
+          if ($LASTEXITCODE -ne 0) { throw "build failed" }
+          $zip = "sysmon-gui-v$ver-win-x64.zip"
+          Compress-Archive -Path dist/sysmon-gui.exe -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
+          "$hash  $zip" | Out-File sha256.txt -Encoding ascii
+          Write-Host "artifact: $zip sha256=$hash"
+
+      - name: Upload build artifact (manual dispatch)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sysmon-gui-build
+          path: sysmon-gui-*.zip
+
+      - name: Create GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## Sysmon GUI v${{ github.ref_name }}
+
+            Windows 下 Sysmon 的可视化部署、规则编辑与日志调查工具。**单文件、零外部依赖**，首次运行可自动从微软官网下载 Sysmon。
+
+            ### 快速开始
+
+            1. 下载 `sysmon-gui-v*.-win-x64.zip` 并解压（校验值见 `sha256.txt`）
+            2. 双击运行 `sysmon-gui.exe`，同意 UAC 提权
+            3. 本机无 Sysmon 时按提示自动从微软官网下载（或自行放置 `Sysmon64.exe` 到同目录）
+            4. 点击「安装 Sysmon 并应用规则」开始采集
+
+            ### 主要能力
+
+            - **部署**：一键安装/卸载/重装、规则脏标记与差异对比、瞬时失败自动重试
+            - **规则**：可视化条件组编辑、官方 schema 校验、XML 预览/导入、规则试算（对已加载日志模拟命中）、26 条内置检测基线
+            - **日志**：原生 Event Log API 全量读取（单窗口 10 万条）、进程谱系树（GUID 引导式定位）、层级分组、检测剧本、GeoIP 国家统计与世界地图（可选离线 mmdb）、只看新事件、CSV 导出
+            - **安全**：本地 API 防 CSRF/DNS rebinding、暗色模式、内置运行日志
+
+            > 注意：可执行文件未做代码签名，首次运行可能触发 SmartScreen 提示，选择「仍要运行」即可；也可按 `sha256.txt` 自行校验哈希。
+
+            ---
+            GPL-3.0 | [项目主页](https://github.com/chenflux/sysmon-gui)
+          files: |
+            sysmon-gui-*.zip
+            sha256.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

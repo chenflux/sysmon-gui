@@ -14,7 +14,7 @@ if not defined GO (
 )
 
 rem --- Version stamping (ldflags injection) ---
-set VER=1.4.0
+set VER=1.0.0
 for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd.HHmm"') do set BTIME=%%i
 set REV=none
 where git >nul 2>nul && for /f %%i in ('git rev-parse --short HEAD 2^>nul') do set REV=%%i

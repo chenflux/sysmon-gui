@@ -1,5 +1,9 @@
 # Sysmon GUI
 
+[![CI](https://github.com/chenflux/sysmon-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/chenflux/sysmon-gui/actions/workflows/ci.yml)
+[![Release](https://github.com/chenflux/sysmon-gui/actions/workflows/release.yml/badge.svg)](https://github.com/chenflux/sysmon-gui/actions/workflows/release.yml)
+[![GitHub release](https://img.shields.io/github/v/release/chenflux/sysmon-gui)](https://github.com/chenflux/sysmon-gui/releases)
+
 Windows 下 [Sysmon](https://learn.microsoft.com/sysinternals/downloads/sysmon) 的可视化部署、规则编辑与日志调查工具。**单文件、零外部依赖**（前端资源与地图数据全部内嵌），面向应急响应与威胁狩猎场景。
 
 ## 功能特性
@@ -29,6 +33,8 @@ Windows 下 [Sysmon](https://learn.microsoft.com/sysinternals/downloads/sysmon) 
 - wevtutil 调用全部限时；规则与部署操作留痕（sysmon-gui.log）
 
 ## 快速开始
+
+**安装**：从 [Releases](https://github.com/chenflux/sysmon-gui/releases) 下载最新 `sysmon-gui-v*-win-x64.zip`（哈希见 `sha256.txt`），解压后：
 
 1. 运行 `sysmon-gui.exe`（首次会弹 UAC 提权）
 2. 若本机没有 Sysmon，程序会询问是否从微软官网自动下载（不同意则退出）
