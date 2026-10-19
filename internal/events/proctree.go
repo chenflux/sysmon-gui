@@ -45,6 +45,9 @@ type TreeResult struct {
 
 const maxNodeEvents = 200
 
+// DebugLogf 诊断日志钩子，默认静默。
+var DebugLogf = func(format string, args ...interface{}) {}
+
 func dataVal(ev Event, name string) string {
 	for _, kv := range ev.Data {
 		if kv.Name == name {
@@ -72,7 +75,91 @@ func ProcessTree(guid string, fetch int, hours int) (*TreeResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildProcessTree(evs, guid, fetch)
+	windowLen := len(evs)
+	// 第二遍：单独拉取 EID 1 窗口（高频事件会淹没进程创建事件，
+	// 专项扫描可让谱系覆盖更久远的历史，而非仅全事件窗口内的启动）
+	eid1s, err := fetchWindow(Options{Fetch: fetch, Hours: hours, EventID: 1})
+	if err != nil {
+		return nil, err
+	}
+	if len(eid1s) > 0 {
+		evs = append(evs, eid1s...)
+	}
+	// 第三遍：引导式精确定位（事件洪水下窗口会漂移，按 GUID 直查保证焦点/谱系不丢）
+	guided, err := guidedEID1s(guid, fetch)
+	if err != nil {
+		return nil, err
+	}
+	evs = append(evs, guided...)
+	res, err := buildProcessTree(evs, guid, fetch)
+	if err != nil {
+		return nil, err
+	}
+	res.Scanned = windowLen
+	res.Truncated = windowLen >= fetch
+	return res, nil
+}
+
+// guidedEID1s 按 GUID 精确拉取焦点进程、祖先链与后代子树的 EID 1 事件，
+// 不依赖「最新 N 条」窗口，事件量再大也不会漏。
+func guidedEID1s(guid string, fetch int) ([]Event, error) {
+	var out []Event
+	seen := map[string]bool{}
+	fetchOne := func(g string) ([]Event, error) {
+		return fetchWindow(Options{Fetch: 4, EventID: 1, ProcGuid: g})
+	}
+	fetchKids := func(g string) ([]Event, error) {
+		return fetchWindow(Options{Fetch: 64, EventID: 1, ParentGuid: g})
+	}
+
+	// 焦点
+	focus, err := fetchOne(guid)
+	if err != nil || len(focus) == 0 {
+		return out, err // 无 EID1（窗口外启动）时由合成节点兜底
+	}
+	out = append(out, focus...)
+
+	// 祖先链（最多 16 层，防环）
+	cur := dataVal(focus[0], "ParentProcessGuid")
+	for depth := 0; depth < 16 && cur != "" && cur != guid && !seen[cur]; depth++ {
+		seen[cur] = true
+		up, err := fetchOne(cur)
+		if err != nil || len(up) == 0 {
+			break
+		}
+		out = append(out, up...)
+		cur = dataVal(up[0], "ParentProcessGuid")
+	}
+
+	// 后代 BFS（总量与 fetch 成比例，封顶）
+	budget := fetch / 10
+	if budget < 50 {
+		budget = 50
+	}
+	if budget > 500 {
+		budget = 500
+	}
+	queue := []string{guid}
+	collected := 0
+	for len(queue) > 0 && collected < budget {
+		g := queue[0]
+		queue = queue[1:]
+		kids, err := fetchKids(g)
+		if err != nil {
+			break
+		}
+		for _, k := range kids {
+			kg := dataVal(k, "ProcessGuid")
+			if kg == "" || seen[kg] {
+				continue
+			}
+			seen[kg] = true
+			out = append(out, k)
+			queue = append(queue, kg)
+			collected++
+		}
+	}
+	return out, nil
 }
 
 func buildProcessTree(evs []Event, guid string, fetch int) (*TreeResult, error) {

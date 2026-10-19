@@ -3,7 +3,7 @@
 > 依据 nshalabi/SysmonTools (GPLv3) 的交互思路整理。**仅借鉴设计思想，不复制其代码与资源文件**（GPL 许可证不兼容）。
 > 现状基线：日志查看页已支持 EID/关键字/时间筛选、事件详情展开、按字段快速下钻（🔍）、哈希/IP/域名 VirusTotal 跳转。
 >
-> **实施进度（2026-10）**：P1 / P2 / P3a 已全部落地 ✅，P3b 暂缓。
+> **实施进度（2026-10）**：P1 / P2 / P3a / P4 / P5 已全部落地 ✅（P3b 地图已实现，坐标打点需 City 离线库）。
 
 ## P1 - 进程谱系树与行为时间线 ✅ 已实现（建议下一步实施）
 
@@ -118,30 +118,75 @@ EID3 网络连接的目的 IP 落到世界地图上（点大小=频次），地�
 | wevtutil 无超时 | `events/reader.go` 直接 `cmd.Run()`，通道异常时 HTTP 挂死 | 复用 `execWithTimeout`（60s）。**✅ 已实现** |
 | GeoIP 端点滥用 | 可被用作任意 IP 查询代理 | 单次上限已有；保持默认关闭。**✅ 维持现状** |
 
-## 4.2 事件管线性能 ✅（部分）
+## 4.2 事件管线性能 ✅
 
 - **增量刷新**：自动刷新从「每 5s 全量拉窗口」改为 `since_record_id` XPath 游标（`EventRecordID > N`）只拉新事件、前端按 record_id 合并去重；手动查询仍全量。**✅ 已实现（实测 4s 窗口 52 条增量、游标无重叠）；新事件超过 200 条自动回退全量** 
 - 关键字多值 OR：`keyword` 支持 `a|b|c` 任一命中（为检测剧本铺路）。**✅ 已实现 + 单测**
 - GeoIP 缓存过期清理（90 天剪枝，防缓存文件无限增长）。**✅ 已实现 + 单测**
-- （后置）原生 `EvtQuery/EvtNext` API 替代 wevtutil 子进程，突破 5000 条窗口限制 ⬜
+- （后置）原生 `EvtQuery/EvtNext` API 替代 wevtutil 子进程，突破 5000 条窗口限制 ⬜ → **✅ P5 已实现（见 5.1）**
 
 ## 4.3 分析能力 ✅（部分）
 
 - **检测剧本快捷筛选**：日志页一键应用预设（lsass 凭证访问 / Office 派生进程 / 脚本解释器 / 系统下载器 / 临时目录执行 / 未签名驱动 / DNS / 外联），配合多值关键字。**✅ 已实现（8 个剧本 chips，带提示与激活态）**
 - **规则试算 (dry-run)**：规则编辑器内用 Sysmon 条件语义（is/contains any·all/excludes any·all/begin·end with/image/数值比较）对当前已加载事件窗口模拟命中，部署前即可验证规则有效性。**✅ 已实现（编辑器「⚡ 试算」按钮 → 命中统计 + 前 50 条示例，区分记录/排除语义）**
 - **配置差异视图**：应用规则时快照 `rules-deployed.json`，脏标记旁一键对比「已部署 vs 当前」（新增/删除/修改）。**✅ 已实现（旧部署无快照时给出友好提示）**
-- （后置）P3b 离线 mmdb、bookmark 只看新事件 ⬜
+- （后置）P3b 离线 mmdb、bookmark 只看新事件 ⬜ → **✅ P5 已实现（见 5.2/5.4）**
 
-## 4.4 工程质量 ✅（部分）
+## 4.4 工程质量 ✅
 
 - 版本可追溯：`internal/version` + ldflags 注入（版本/构建时间/rev），状态页与启动日志展示。**✅ 已实现**
 - build.bat 可移植化：优先 PATH 中的 go、`-trimpath`、版本注入；去掉硬编码路径依赖。**✅ 已实现**
 - CI（GitHub Actions）：build + vet + test + `node --check`。**✅ 已添加 .github/workflows/ci.yml**
 - API 中间件/reader 单测补齐（httptest）。**✅ 已实现（安全中间件 13 用例 + 多值关键字 + GeoIP 剪枝）**
 - 内置运行日志页：新 tab 直读 `sysmon-gui.log`，方便现场排障。**✅ 已实现（GET /api/applog + 运行日志 tab + 自动刷新）**
-- （后置）app.js 模块拆分、api handler 全覆盖测试、清理 manager.go 存量 vet 告警 ⬜
+- （后置）app.js 模块拆分、api handler 全覆盖测试、清理 manager.go 存量 vet 告警 ⬜ → **✅ P5 已实现（见 5.5）**
 
 ## 4.5 体验细节 ✅（部分）
 
 - 事件表列排序（时间/EID 升降序，客户端侧）。**✅ 已实现（表头点击切换，仅平铺视图）**
-- （后置）筛选预设保存、暗色模式、事件原始 XML 视图（需原生 API 保留原文）⬜
+- （后置）筛选预设保存、暗色模式、事件原始 XML 视图（需原生 API 保留原文）⬜ → **✅ P5 已实现（见 5.4/5.6）**
+
+---
+
+# P5 全量日志与离线能力（2026-10 第三轮，全部完成 ✅）
+
+## 5.1 原生 Event Log API 全量日志 ✅
+
+- `internal/evtapi`：EvtQuery/EvtNext/EvtRender 直调 wevtapi.dll，无子进程开销；wevtutil 保留为回退路径
+- fetch 上限 **5000 → 100000**（「加载 10 万条 (全量)」），分组视图/CSV 导出同步放开
+- 关键修复：EvtQueryReverseDirection 正确取值 **0x200**（0x100 是正向——曾导致原生读到频道最古老事件）
+- 进程谱系三遍扫描：全事件窗口 + EID1 专项窗口 + **引导式 GUID 精确定位**（XPath `EventData[Data[@Name='ProcessGuid']='...']`，祖先链 16 层 + 后代 BFS ≤500，事件洪水下不丢焦点）
+- 已知引擎怪癖（已规避）：谓词值含大括号会触发语法错误，须剥离；谓词匹配对旧世代事件不可靠 → 引导查询仅作增强，窗口合并保证兜底
+
+## 5.2 离线 mmdb 解析（P3b 前半） ✅
+
+- `internal/geoip/mmdb.go`：自实现 MaxMind DB 读取器（二进制搜索树 24/28/32bit 记录 + 数据段全类型解码 + 指针解析），支持 GeoLite2-Country/City，**无第三方依赖**
+- 放入 `GeoLite2-City.mmdb`（或 Country）即全离线解析，不外发 IP；City 库额外提供坐标（地图打点）
+- `/api/geoip/status` 报告离线库状态，前端面板显示「离线/在线」徽标与放置提示
+- 单测：树记录/查找/指针解码/中文名提取全绿
+
+## 5.3 P3b 外联地图 ✅
+
+- 内嵌公共领域世界 geojson（Natural Earth 衍生，180 国，257KB）
+- 等距圆柱投影 SVG：国家**热力着色**（外联频次）+ City 离线库坐标**红色圆点**（大小=频次，title 提示）
+- A2→A3 国家代码映射、深浅色主题适配（CSS 变量）
+
+## 5.4 日志分析体验 ✅
+
+- **只看新事件**：localStorage RecordID 基准 +「标记为已读」，自动刷新配合增量游标零成本跟踪新事件
+- **筛选预设**：「存筛选」保存 EID/关键字/时间/条数组合（最多 12 个），chips 一键应用/删除
+- **事件原始 XML**：原生拉取的事件 LRU 缓存 1 万条（淘汰最旧方向），详情「查看 XML」直出原文
+- **暗色模式**：顶栏一键切换，CSS 变量全量适配，localStorage 持久化
+
+## 5.5 工程收尾 ✅
+
+- app.js 模块化拆分：`js/core.js`（工具/状态）+ `js/rules.js`（规则/试算/差异/导入）+ `js/logs.js`（日志/分组/剧本/预设）+ `js/tree.js`（谱系）+ `js/geo.js`（GeoIP/地图）+ `app.js`（启动/状态页），零重复声明
+- api handler 全覆盖 httptest（meta/rules 往返/validate/preview/applog/deployed/templates/config.xml/events 容错，兼容无 Sysmon CI）
+- manager.go version.dll `unsafe.Pointer` 存量 vet 告警清零（out-param 改类型化指针）
+- **git 仓库初始化**（.gitignore + 里程碑提交），防止再次误操作
+
+## 5.6 遗留已知项
+
+- EvtNext 批次间事件洪水可致 5000+ 窗口轻微漂移（已由引导式查询兜底，非缺陷）
+- 谓词查询对「旧世代」事件（重装前/重登录的存量）可能不可靠（引擎行为，靠窗口合并兜底）
+- mmdb 需用户自行下载（MaxMind 注册，每月更新 ~6MB）

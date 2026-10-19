@@ -42,7 +42,9 @@ type Options struct {
 	Fetch         int
 	Page          int
 	PageSize      int
-	SinceRecordID int64 // 仅返回 EventRecordID 大于该值的事件（增量刷新）
+	SinceRecordID int64  // 仅返回 EventRecordID 大于该值的事件（增量刷新）
+	ProcGuid      string // 精确匹配 EventData 的 ProcessGuid（进程谱系用）
+	ParentGuid    string // 精确匹配 EventData 的 ParentProcessGuid（进程谱系用）
 }
 
 type Result struct {
@@ -74,20 +76,35 @@ type eventXML struct {
 var levelNames = map[int]string{0: "信息", 1: "严重", 2: "错误", 3: "警告", 4: "信息", 5: "详细"}
 
 func buildXPath(o Options) string {
-	var conds []string
+	var sysConds, dataConds []string
 	if o.EventID > 0 {
-		conds = append(conds, fmt.Sprintf("(EventID=%d)", o.EventID))
+		sysConds = append(sysConds, fmt.Sprintf("(EventID=%d)", o.EventID))
 	}
 	if o.Hours > 0 {
-		conds = append(conds, fmt.Sprintf("TimeCreated[timediff(@SystemTime) <= %d]", o.Hours*3600000))
+		sysConds = append(sysConds, fmt.Sprintf("TimeCreated[timediff(@SystemTime) <= %d]", o.Hours*3600000))
 	}
 	if o.SinceRecordID > 0 {
-		conds = append(conds, fmt.Sprintf("(EventRecordID > %d)", o.SinceRecordID))
+		sysConds = append(sysConds, fmt.Sprintf("(EventRecordID > %d)", o.SinceRecordID))
 	}
-	if len(conds) == 0 {
+	if o.ProcGuid != "" {
+		// 注意：谓词值中的大括号会导致事件引擎 XPath 语法错误（15001/38），须去除；
+		// 值比较对大括号宽容（裸 GUID 可命中带大括号存储的值）
+		dataConds = append(dataConds, fmt.Sprintf("EventData[Data[@Name='ProcessGuid']='%s']", strings.Trim(o.ProcGuid, "{}")))
+	}
+	if o.ParentGuid != "" {
+		dataConds = append(dataConds, fmt.Sprintf("EventData[Data[@Name='ParentProcessGuid']='%s']", strings.Trim(o.ParentGuid, "{}")))
+	}
+	var parts []string
+	if len(sysConds) > 0 {
+		parts = append(parts, "System["+strings.Join(sysConds, " and ")+"]")
+	}
+	if len(dataConds) > 0 {
+		parts = append(parts, strings.Join(dataConds, " and "))
+	}
+	if len(parts) == 0 {
 		return ""
 	}
-	return "*[System[" + strings.Join(conds, " and ") + "]]"
+	return "*[" + strings.Join(parts, " and ") + "]"
 }
 
 func Query(opts Options) (*Result, error) {
@@ -264,9 +281,10 @@ func cacheEventXML(id int64, s string) {
 		xmlMap[id] = s
 		return
 	}
-	if len(xmlOrder) >= xmlCacheCap {
-		oldest := xmlOrder[0]
-		xmlOrder = xmlOrder[1:]
+	// 到达顺序为「最新在前」，因此队尾是最旧事件；淘汰队尾以保留最新的窗口供详情查看
+	for len(xmlOrder) >= xmlCacheCap {
+		oldest := xmlOrder[len(xmlOrder)-1]
+		xmlOrder = xmlOrder[:len(xmlOrder)-1]
 		delete(xmlMap, oldest)
 	}
 	xmlMap[id] = s

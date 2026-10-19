@@ -20,8 +20,9 @@ var (
 )
 
 const (
-	evtQueryChannelPath      = 0x1
-	evtQueryReverseDirection = 0x100
+	evtQueryChannelPath = 0x1
+	// EvtQueryForwardDirection = 0x100, EvtQueryReverseDirection = 0x200 (winevt.h)
+	evtQueryReverseDirection = 0x200
 	evtRenderEventXml        = 0x1
 	evtNextTimeoutInfinite   = 0xFFFFFFFF
 	errEvtChannelNotFound    = 15002
